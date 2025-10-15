@@ -9,4 +9,8 @@ public class ElGemalEncryptedData {
 		this.c1 = c1;
 		this.c2 = c2;
 	}
+	
+	public void print() {
+		System.out.println("<" + this.c1 + ", " + this.c2 + ">");
+	}
 }

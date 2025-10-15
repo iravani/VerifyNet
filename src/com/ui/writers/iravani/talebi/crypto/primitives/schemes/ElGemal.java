@@ -42,6 +42,6 @@ public class ElGemal {
 	}
 
 	public BigInteger Dec(ElGemalEncryptedData c) {
-		return c.c1.divide(c.c2.modPow(keyPair.sk.x, keyPair.sk.q));
+		return c.c2.divide(c.c1.modPow(keyPair.sk.x, keyPair.sk.q));
 	}
 }
