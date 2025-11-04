@@ -299,10 +299,10 @@ public class VNetSimulator {
         int activeUsers = (int) (USERS_SIZE * (1 - DROPOUT_RATE));
 
         // Mock: Initialize key parameters
-        vnet.d = BigInteger.valueOf(new Random().nextInt(1000)); // Mock d
-        vnet.tau = BigInteger.valueOf(new Random().nextInt(1000)); // Mock tau
-        vnet.k[0].val[0] = BigInteger.valueOf(new Random().nextInt(1000));
-        vnet.k[1].val[0] = BigInteger.valueOf(new Random().nextInt(1000));
+        vnet.d = BigInteger.probablePrime(LAMDA, sRand); // Mock d
+        vnet.tau = BigInteger.probablePrime(LAMDA, sRand); // Mock tau
+        vnet.k[0].val[0] = BigInteger.probablePrime(LAMDA, sRand);
+        vnet.k[1].val[0] = BigInteger.probablePrime(LAMDA, sRand);
 
         // Initialize active arrays (U1)
         Arrays.fill(vnet.uAct1, true);
