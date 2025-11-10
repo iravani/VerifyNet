@@ -85,7 +85,7 @@ class ExecutionTimer {
 }
 
 class Crypto {	
-	public static final int LAMDA = 128;
+	public static final int LAMDA = 32;
 	static SecureRandom sRand = new SecureRandom();
     // پارامترهای عمومی
     public static final BigInteger g = BigInteger.valueOf(7);
