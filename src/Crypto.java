@@ -10,6 +10,8 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import com.ui.writers.iravani.talebi.crypto.primitives.schemes.BilinearPairing;
+
 
 public class Crypto {
 	public static final int LAMDA = 32;
@@ -20,6 +22,8 @@ public class Crypto {
 	public static final BigInteger Q = BigInteger.probablePrime(LAMDA, sRand); // prime order
 
 	public static final BigInteger EXP_MOD = Q.subtract(BigInteger.ONE);
+	
+	public static final BilinearPairing PAIR = new BilinearPairing(LAMDA, 512);
 
 	// define k for generate h
 	public static final BigInteger k = BigInteger.probablePrime(LAMDA, sRand); // this is secret
