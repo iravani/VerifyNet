@@ -10,17 +10,19 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+
 public class Crypto {
 	public static final int LAMDA = 32;
 	static SecureRandom sRand = new SecureRandom();
-	// پارامترهای عمومی
+
+	// public parameters
 	public static final BigInteger g = BigInteger.valueOf(7);
-	public static final BigInteger Q = BigInteger.probablePrime(LAMDA, sRand); // مرتبه گروه (prime order)
+	public static final BigInteger Q = BigInteger.probablePrime(LAMDA, sRand); // prime order
 
 	public static final BigInteger EXP_MOD = Q.subtract(BigInteger.ONE);
 
-	// (اصلاح شده) k مخفی برای تعریف h
-	public static final BigInteger k = BigInteger.probablePrime(LAMDA, sRand); // k مخفی
+	// define k for generate h
+	public static final BigInteger k = BigInteger.probablePrime(LAMDA, sRand); // this is secret
 	public static final BigInteger h = g.modPow(k, Q); // h = g^k
 
 	// (اصلاح شده) d = 3 (اطمینان از وجود معکوس پیمانه‌ای)
