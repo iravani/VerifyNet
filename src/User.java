@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
 
+import com.ui.writers.iravani.talebi.crypto.primitives.data.structure.HashTupple;
+
 public class User {
 	public final int id;
 	public final BigInteger N_pk, N_sk, P_pk, P_sk;
@@ -43,8 +45,8 @@ public class User {
 		beta_n = new BigInteger(64, new SecureRandom()).mod(Crypto.Q);
 
 		List<Integer> userIds = U1.stream().map(u -> u.id).collect(Collectors.toList());
-		List<Crypto.ShamirPoint> beta_shares = Crypto.S_share(beta_n, t, userIds);
-		List<Crypto.ShamirPoint> Nsk_shares = Crypto.S_share(N_sk, t, userIds);
+		List<ShamirPoint> beta_shares = Crypto.S_share(beta_n, t, userIds);
+		List<ShamirPoint> Nsk_shares = Crypto.S_share(N_sk, t, userIds);
 
 		Map<Integer, String> p_n_m = new HashMap<>();
 		for (int i = 0; i < U1.size(); i++) {
@@ -100,9 +102,10 @@ public class User {
 
 		// --- محاسبه اثبات‌ها (بر اساس المان اول) ---
 		// (اصلاح شده) اثبات‌ها باید بر اساس گرادیان واقعی باشند
-		BigInteger hash_x_simplified = Crypto.HF(localGradient.get(0), delta, rho).mod(Crypto.EXP_MOD);
-		BigInteger A_n = Crypto.power(Crypto.g, hash_x_simplified);
-		BigInteger B_n = Crypto.power(Crypto.h, hash_x_simplified);
+		BigInteger h_x_simp = localGradient.get(0).multiply(delta).add(rho);
+		HashTupple hash_x_simplified = Crypto.HF(h_x_simp);
+		BigInteger A_n = hash_x_simplified.h1;
+		BigInteger B_n = hash_x_simplified.h2;
 
 		this.gamma_n = new BigInteger(64, new SecureRandom()).mod(Crypto.EXP_MOD);
 		this.nu_n = new BigInteger(64, new SecureRandom()).mod(Crypto.EXP_MOD);
@@ -110,11 +113,10 @@ public class User {
 		// (اصلاح شده) رفع خطای تقسیم بر d
 		BigInteger exponent = gamma_n.multiply(gamma_global).add(nu_n.multiply(nu_global)).mod(Crypto.EXP_MOD);
 
-		BigInteger L_n_exponent = exponent.subtract(hash_x_simplified).mod(Crypto.EXP_MOD);
-		L_n_exponent = L_n_exponent.multiply(Crypto.d_inv).mod(Crypto.EXP_MOD);
+		HashTupple L_n_exponent = Crypto.HF(exponent.subtract(h_x_simp).mod(Crypto.EXP_MOD).multiply(Crypto.d_inv).mod(Crypto.EXP_MOD));
 
-		BigInteger L_n = Crypto.power(Crypto.g, L_n_exponent);
-		BigInteger Q_n = Crypto.power(Crypto.h, L_n_exponent);
+		BigInteger L_n = L_n_exponent.h1;
+		BigInteger Q_n = L_n_exponent.h2;
 
 		ExecutionTimer.addClientTime(Round.R2, System.nanoTime() - startTime);
 		return new Round2Output(x_hat, A_n, B_n, L_n, Q_n, BigInteger.ONE);
@@ -124,8 +126,8 @@ public class User {
 	public Round3Input round3_Unmasking(Map<Integer, String> P_m_n, List<User> U3) {
 		long startTime = System.nanoTime();
 		// (اصلاح شده) ذخیره نقاط شامیر
-		Map<Integer, Crypto.ShamirPoint> Nsk_shares = new HashMap<>();
-		Map<Integer, Crypto.ShamirPoint> beta_shares = new HashMap<>();
+		Map<Integer, ShamirPoint> Nsk_shares = new HashMap<>();
+		Map<Integer, ShamirPoint> beta_shares = new HashMap<>();
 
 		for (User m : U3) {
 			// کلید برای رمزگشایی پیام‌هایی که m (فرستنده) برای n (this.id - گیرنده) فرستاده
@@ -140,8 +142,8 @@ public class User {
 					String[] parts = decrypted.split("\\|");
 					if (parts.length == 6) {
 						// id_n(m) | id_m(this) | Nsk.toString() | beta.toString()
-						Crypto.ShamirPoint nsk_point = Crypto.ShamirPoint.fromString(parts[2] + "|" + parts[3]);
-						Crypto.ShamirPoint beta_point = Crypto.ShamirPoint.fromString(parts[4] + "|" + parts[5]);
+						ShamirPoint nsk_point = ShamirPoint.fromString(parts[2] + "|" + parts[3]);
+						ShamirPoint beta_point = ShamirPoint.fromString(parts[4] + "|" + parts[5]);
 
 						if (nsk_point != null && beta_point != null) {
 							Nsk_shares.put(m.id, nsk_point);

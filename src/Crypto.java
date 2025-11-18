@@ -10,7 +10,9 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import com.ui.writers.iravani.talebi.crypto.primitives.data.structure.HashTupple;
 import com.ui.writers.iravani.talebi.crypto.primitives.schemes.BilinearPairing;
+import com.ui.writers.iravani.talebi.crypto.primitives.schemes.HomomorphicHash;
 
 
 public class Crypto {
@@ -29,14 +31,14 @@ public class Crypto {
 	public static final BigInteger k = BigInteger.probablePrime(LAMDA, sRand); // this is secret
 	public static final BigInteger h = g.modPow(k, Q); // h = g^k
 
-	// (اصلاح شده) d = 3 (اطمینان از وجود معکوس پیمانه‌ای)
+	// d = 3 to make sure that we have inversion of d
 	public static final BigInteger d = BigInteger.valueOf(3);
 	public static final BigInteger d_inv = d.modInverse(EXP_MOD); // d^-1 mod Q
 
-	// برای رمزنگاری متقارن
+	// for SKE
 	private static final String AES_MODE = "AES/CBC/PKCS5Padding";
 
-	// --- توابع ریاضی و گروهی ---
+	// --- Math and group functions ---
 
 	public static BigInteger power(BigInteger base, BigInteger exponent) {
 		BigInteger expReduced = exponent.mod(EXP_MOD); // reduce exponent modulo Q-1
@@ -47,11 +49,12 @@ public class Crypto {
 		return power(pk, sk);
 	}
 
-	public static BigInteger HF(BigInteger x, BigInteger delta, BigInteger rho) {
-		return delta.multiply(x).add(rho).mod(Q);
+	public static HashTupple HF(BigInteger m) {
+		HomomorphicHash hash = new HomomorphicHash(LAMDA, g, EXP_MOD);
+		return hash.hash(m);
 	}
 
-	// PRG (تغییر یافته برای تولید بردار)
+	// PRG
 	public static List<BigInteger> PRG(BigInteger seed, int size) {
 		List<BigInteger> vector = new ArrayList<>(size);
 		try {
@@ -67,7 +70,6 @@ public class Crypto {
 		}
 	}
 
-	// (توابع AE.enc/dec بدون تغییر باقی می‌مانند)
 	private static SecretKeySpec getAesKey(BigInteger KA_Key) {
 		try {
 			MessageDigest sha = MessageDigest.getInstance("SHA-256");
@@ -111,32 +113,7 @@ public class Crypto {
 			return null; // بازگشت null در صورت خطای رمزگشایی
 		}
 	}
-
-	// --- توابع اشتراک راز شامیر (S.share/S.recon) ---
-
-	// (اصلاح شده)
-	public static class ShamirPoint {
-		public final BigInteger x;
-		public final BigInteger y;
-
-		ShamirPoint(BigInteger x, BigInteger y) {
-			this.x = x;
-			this.y = y;
-		}
-
-		@Override
-		public String toString() {
-			return x + "|" + y;
-		}
-
-		public static ShamirPoint fromString(String s) {
-			String[] parts = s.split("\\|");
-			if (parts.length != 2)
-				return null;
-			return new ShamirPoint(new BigInteger(parts[0]), new BigInteger(parts[1]));
-		}
-	}
-
+	
 	public static List<ShamirPoint> S_share(BigInteger secret, int t, List<Integer> uIndices) {
 		int degree = t - 1;
 		List<BigInteger> coeffs = new ArrayList<>();
