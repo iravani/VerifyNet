@@ -14,5 +14,6 @@
 	<classpathentry kind="lib" path="lib/jpbc-mm-2.0.0.jar"/>
 	<classpathentry kind="lib" path="lib/jpbc-pbc-2.0.0.jar"/>
 	<classpathentry kind="lib" path="lib/jpbc-plaf-2.0.0.jar"/>
+	<classpathentry kind="lib" path="lib/jol-core-0.17.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>
