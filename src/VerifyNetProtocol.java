@@ -2,10 +2,6 @@
 //  توابع و ساختارهای داده پایه (اصلاح شده)
 // =====================================================================
 
-import it.unisa.dia.gas.jpbc.Element;
-import it.unisa.dia.gas.jpbc.Field;
-import it.unisa.dia.gas.jpbc.Pairing;
-
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.util.*;
