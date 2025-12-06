@@ -125,7 +125,7 @@ public class User {
 		ExecutionTimer.addClientTime(Round.R2, System.nanoTime() - startTime);
 		//return new Round2Output(x_hat, A_n, B_n, L_n, Q_n, BigInteger.ONE);
 		// داخل User.round2_MaskedInput — پس از محاسبه hash_x_simplified و L_n_exponent (BigInteger)
-		Element zr_hash = Crypto.pairing.getZr().newElement().set(hash_x_simplified.mod(Crypto.EXP_MOD));
+		Element zr_hash = Crypto.pairing.getZr().newElement().set(hash_x_simplified.mod(r));
 		Element A_elem = Crypto.gElement.powZn(zr_hash).getImmutable();
 		Element B_elem = Crypto.hElement.powZn(zr_hash).getImmutable();
 
@@ -185,21 +185,20 @@ public class User {
 		BigInteger r = pairing.getZr().getOrder();
 		aggregatedPhi = aggregatedPhi.mod(r);
 		
-	    Element leftA  = pairing.pairing(A, h);
-	    Element rightA = pairing.pairing(g, B);
-	    boolean eq_A = leftA.isEqual(rightA);
+		Element leftA  = pairing.pairing(A, h);
+		Element rightA = pairing.pairing(g, B);
+		boolean eq_A = leftA.isEqual(rightA);
 
 	    // compute L^d and Q^d safely using Zr elements
-	    Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(r));
-	    Element L_d = L.duplicate().powZn(zr_d).getImmutable();
-	    Element Q_d = proofQ.duplicate().powZn(zr_d).getImmutable();
+		Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(r));
+		Element L_d = L.duplicate().powZn(zr_d).getImmutable();
+		Element Q_d = proofQ.duplicate().powZn(zr_d).getImmutable();
+		boolean eq_B = pairing.pairing(L_d, h).isEqual(pairing.pairing(g, Q_d));
 
-	    boolean eq_B = pairing.pairing(L_d, h).isEqual(pairing.pairing(g, Q_d));
-
-	    Element zr_phi = pairing.getZr().newElement().set(aggregatedPhi);
-	    Element Phi_val = g.powZn(zr_phi).getImmutable();
-	    Element RHS_C = A.duplicate().mul(L_d).getImmutable();
-	    boolean eq_C = Phi_val.isEqual(RHS_C);
+		Element zr_phi = pairing.getZr().newElement().set(aggregatedPhi.mod(r));
+		Element Phi_val = Crypto.gElement.powZn(zr_phi).getImmutable();
+		Element RHS_C = A.duplicate().mul(L_d).getImmutable();
+		boolean eq_C = Phi_val.isEqual(RHS_C);
 
 	    boolean result = eq_A && eq_B && eq_C;
 	    // logging...
