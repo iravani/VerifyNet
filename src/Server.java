@@ -5,6 +5,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import it.unisa.dia.gas.jpbc.Pairing;
+import it.unisa.dia.gas.jpbc.PairingParameters;
+import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
+import it.unisa.dia.gas.plaf.jpbc.pairing.a.TypeACurveGenerator;
+import it.unisa.dia.gas.jpbc.Element;
+
 public class Server {
 	public List<User> U1;
 	public BigInteger tau;
@@ -123,24 +129,24 @@ public class Server {
 		}
 
 		// 4. محاسبه اثبات تجمیع‌شده (A, B, L, Q)
-		BigInteger A = BigInteger.ONE;
-		BigInteger B = BigInteger.ONE;
-		BigInteger L = BigInteger.ONE;
-		BigInteger Q = BigInteger.ONE;
+		Element aggA = Crypto.pairing.getG1().newOneElement().getImmutable(); // identity element
+		Element aggB = Crypto.pairing.getG1().newOneElement().getImmutable();
+		Element aggL = Crypto.pairing.getG1().newOneElement().getImmutable();
+		Element aggQ = Crypto.pairing.getG1().newOneElement().getImmutable();
 
 		for (User u : U3) {
-			Round2Output output = round2Outputs.get(u.id);
-			if (output != null) {
-				A = A.multiply(output.A_n).mod(Crypto.Q);
-				B = B.multiply(output.B_n).mod(Crypto.Q);
-				L = L.multiply(output.L_n).mod(Crypto.Q);
-				Q = Q.multiply(output.Q_n).mod(Crypto.Q);
-			}
+		    Round2Output output = round2Outputs.get(u.id);
+		    if (output != null) {
+		    	aggA = aggA.duplicate().mul(output.A).getImmutable();
+		    	aggB = aggB.duplicate().mul(output.B).getImmutable();
+		    	aggL = aggL.duplicate().mul(output.L).getImmutable();
+		    	aggQ = aggQ.duplicate().mul(output.Q).getImmutable();
+		    }
 		}
 
 		ExecutionTimer.addServerTime(Round.R3, System.nanoTime() - startTime);
 
-		return new Round3Output(sigma.get(0), A, B, L, Q, BigInteger.ONE);
+		return new Round3Output(sigma.get(0), aggA, aggB, aggL, aggQ, BigInteger.ONE);
 	}
 
 	// متد کمکی برای جمع بردارها

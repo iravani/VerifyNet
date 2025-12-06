@@ -10,8 +10,12 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import it.unisa.dia.gas.jpbc.Pairing;
+import it.unisa.dia.gas.jpbc.Element;
+
 public class Crypto {
-	public static final int LAMDA = 32;
+	public static final int LAMDA = 256;
+	public static final int AES_KEY_BYTES = 32;
 	static SecureRandom sRand = new SecureRandom();
 	// پارامترهای عمومی
 	public static final BigInteger g = BigInteger.valueOf(7);
@@ -24,12 +28,32 @@ public class Crypto {
 	public static final BigInteger h = g.modPow(k, Q); // h = g^k
 
 	// (اصلاح شده) d = 3 (اطمینان از وجود معکوس پیمانه‌ای)
-	public static final BigInteger d = BigInteger.valueOf(3);
-	public static final BigInteger d_inv = d.modInverse(EXP_MOD); // d^-1 mod Q
+	public static final BigInteger d;
+	public static final BigInteger d_inv;
+
+	static {
+	    // دقت: EXP_MOD قبلاً تعریف شده است (Q-1)
+	    BigInteger candidate = BigInteger.valueOf(3);
+	    // اگر خواستی می‌توانی از یک SecureRandom برای انتخاب تصادفی استفاده کنی
+	    while (!candidate.gcd(EXP_MOD).equals(BigInteger.ONE)) {
+	        candidate = candidate.add(BigInteger.ONE); // یا candidate = candidate.nextProbablePrime();
+	    }
+	    d = candidate;
+	    d_inv = d.modInverse(EXP_MOD); // الان امن است چون gcd(d, EXP_MOD) == 1
+	}
 
 	// برای رمزنگاری متقارن
 	private static final String AES_MODE = "AES/CBC/PKCS5Padding";
 
+	public static Pairing pairing = null;
+    public static Element gElement = null;
+    public static Element hElement = null;
+
+    public static void initPairing(Pairing p, Element gEl, Element hEl) {
+        pairing = p;
+        gElement = gEl.getImmutable();
+        hElement = hEl.getImmutable();
+    }
 	// --- توابع ریاضی و گروهی ---
 
 	public static BigInteger power(BigInteger base, BigInteger exponent) {
@@ -63,48 +87,58 @@ public class Crypto {
 
 	// (توابع AE.enc/dec بدون تغییر باقی می‌مانند)
 	private static SecretKeySpec getAesKey(BigInteger KA_Key) {
-		try {
-			MessageDigest sha = MessageDigest.getInstance("SHA-256");
-			byte[] key = sha.digest(KA_Key.toByteArray());
-			return new SecretKeySpec(Arrays.copyOf(key, LAMDA), "AES");
-		} catch (Exception e) {
-			throw new RuntimeException("Key generation failed", e);
-		}
-	}
+        try {
+            MessageDigest sha = MessageDigest.getInstance("SHA-256");
+            byte[] key = sha.digest(KA_Key.toByteArray()); // این همیشه 32 بایت خروجی می‌دهد
+            // Debug (اختیاری)
+            // System.out.println("SHA-256 output length: " + key.length + ", AES_KEY_BYTES=" + AES_KEY_BYTES);
 
+            if (AES_KEY_BYTES != 16 && AES_KEY_BYTES != 24 && AES_KEY_BYTES != 32) {
+                throw new IllegalArgumentException("AES_KEY_BYTES must be 16, 24, or 32");
+            }
+
+            // Arrays.copyOf به‌طور خودکار اگر AES_KEY_BYTES <= key.length کار می‌کند
+            byte[] keyBytes = Arrays.copyOf(key, AES_KEY_BYTES);
+            return new SecretKeySpec(keyBytes, "AES");
+        } catch (Exception e) {
+            throw new RuntimeException("Key generation failed", e);
+        }
+    }
+	
 	public static String AE_enc(BigInteger KA_Key, String message) {
-		try {
-			SecretKeySpec secretKey = getAesKey(KA_Key);
-			Cipher cipher = Cipher.getInstance(AES_MODE);
-			SecureRandom random = new SecureRandom();
-			byte[] iv = new byte[cipher.getBlockSize()];
-			random.nextBytes(iv);
-			cipher.init(Cipher.ENCRYPT_MODE, secretKey, new IvParameterSpec(iv));
-			byte[] encryptedData = cipher.doFinal(message.getBytes("UTF-8"));
-			String ivBase64 = Base64.getEncoder().encodeToString(iv);
-			String dataBase64 = Base64.getEncoder().encodeToString(encryptedData);
-			return ivBase64 + ":" + dataBase64;
-		} catch (Exception e) {
-			throw new RuntimeException("Encryption failed", e);
-		}
-	}
+        try {
+            SecretKeySpec secretKey = getAesKey(KA_Key);
+            Cipher cipher = Cipher.getInstance(AES_MODE);
+            SecureRandom random = new SecureRandom();
+            byte[] iv = new byte[cipher.getBlockSize()];
+            random.nextBytes(iv);
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey, new IvParameterSpec(iv));
+            byte[] encryptedData = cipher.doFinal(message.getBytes("UTF-8"));
+            String ivBase64 = Base64.getEncoder().encodeToString(iv);
+            String dataBase64 = Base64.getEncoder().encodeToString(encryptedData);
+            return ivBase64 + ":" + dataBase64;
+        } catch (Exception e) {
+            throw new RuntimeException("Encryption failed", e);
+        }
+    }
 
 	public static String AE_dec(BigInteger KA_Key, String encrypted) {
-		try {
-			String[] parts = encrypted.split(":");
-			if (parts.length != 2)
-				throw new IllegalArgumentException("Invalid encrypted format");
-			byte[] iv = Base64.getDecoder().decode(parts[0]);
-			byte[] encryptedData = Base64.getDecoder().decode(parts[1]);
-			SecretKeySpec secretKey = getAesKey(KA_Key);
-			Cipher cipher = Cipher.getInstance(AES_MODE);
-			cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
-			byte[] decryptedData = cipher.doFinal(encryptedData);
-			return new String(decryptedData, "UTF-8");
-		} catch (Exception e) {
-			return null; // بازگشت null در صورت خطای رمزگشایی
-		}
-	}
+        try {
+            String[] parts = encrypted.split(":");
+            if (parts.length != 2)
+                throw new IllegalArgumentException("Invalid encrypted format");
+            byte[] iv = Base64.getDecoder().decode(parts[0]);
+            byte[] encryptedData = Base64.getDecoder().decode(parts[1]);
+            SecretKeySpec secretKey = getAesKey(KA_Key);
+            Cipher cipher = Cipher.getInstance(AES_MODE);
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
+            byte[] decryptedData = cipher.doFinal(encryptedData);
+            return new String(decryptedData, "UTF-8");
+        } catch (Exception e) {
+            e.printStackTrace(); // لاگ برای دیباگ
+            return null; // یا می‌توانی Exception پرتاب کنی
+        }
+    }
 
 	// --- توابع اشتراک راز شامیر (S.share/S.recon) ---
 

@@ -1,17 +1,22 @@
 import java.math.BigInteger;
 import java.util.List;
 
-public class Round2Output {
-	public final List<BigInteger> x_hat;
-	public final BigInteger A_n, B_n, L_n, Q_n, Omega_n;
+import it.unisa.dia.gas.jpbc.Element;
 
-	public Round2Output(List<BigInteger> x_hat, BigInteger A_n, BigInteger B_n, BigInteger L_n, BigInteger Q_n,
-			BigInteger Omega_n) {
-		this.x_hat = x_hat;
-		this.A_n = A_n;
-		this.B_n = B_n;
-		this.L_n = L_n;
-		this.Q_n = Q_n;
-		this.Omega_n = Omega_n;
-	}
+public class Round2Output {
+    public List<BigInteger> x_hat; // masked vector (اگر می‌خواهی همین بمونه)
+    public Element A; // g^{hash}
+    public Element B; // h^{hash}
+    public Element L; // g^{L_n_exponent}
+    public Element Q; // h^{L_n_exponent}
+    public BigInteger someFlag;
+
+    public Round2Output(List<BigInteger> x_hat, Element A, Element B, Element L, Element Q, BigInteger flag) {
+        this.x_hat = x_hat;
+        this.A = A;
+        this.B = B;
+        this.L = L;
+        this.Q = Q;
+        this.someFlag = flag;
+    }
 }

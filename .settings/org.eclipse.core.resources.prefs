@@ -1,6 +1,8 @@
 eclipse.preferences.version=1
 encoding//src/Crypto.java=UTF-8
 encoding//src/ExecutionTimer.java=UTF-8
+encoding//src/Round2Output.java=UTF-8
+encoding//src/Round3Output.java=UTF-8
 encoding//src/Server.java=UTF-8
 encoding//src/User.java=UTF-8
 encoding//src/VerifyNetProtocol.java=UTF-8

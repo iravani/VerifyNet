@@ -3,6 +3,12 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import it.unisa.dia.gas.jpbc.Pairing;
+import it.unisa.dia.gas.jpbc.PairingParameters;
+import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
+import it.unisa.dia.gas.plaf.jpbc.pairing.a.TypeACurveGenerator;
+import it.unisa.dia.gas.jpbc.Element;
+
 enum Round {
 	R0, R1, R2, R3, R4
 }
@@ -24,6 +30,19 @@ public class VerifyNetProtocol {
 
 	public static void main(String[] args) {
 		SecureRandom secRand = new SecureRandom();
+		
+		int rBits = 160;
+		int qBits = 512;
+		TypeACurveGenerator pg = new TypeACurveGenerator(rBits, qBits);
+		
+		PairingParameters params = pg.generate();
+		Pairing pairing = PairingFactory.getPairing(params);
+		
+		Element g = pairing.getG1().newRandomElement().getImmutable();
+		Element zr_k = pairing.getZr().newElement().set(Crypto.k.mod(pairing.getZr().getOrder()));
+		Element h = g.powZn(zr_k).getImmutable();
+		
+		Crypto.initPairing(pairing, g, h);
 
 		// TA : Generate Keys
 		List<User> allUsers = new ArrayList<>();
@@ -98,7 +117,7 @@ public class VerifyNetProtocol {
 						U3.size(), SHAMIR_TRESHOLD);
 				continue;
 			}
-
+			
 			// calculate phi based on U3
 			BigInteger aggregated_phi_actual = BigInteger.ZERO;
 			for (User u : U3) {
@@ -133,12 +152,22 @@ public class VerifyNetProtocol {
 
 			// --- R4: verification ---
 			System.out.println("\n--- R4: Verification ---");
-			int successCount = 0;
+			int successCount = 0, sc2 = 0;
+
 			for (User u : U3) {
-				if (u.round4_Verification(finalResult, aggregated_phi_actual)) {
-					successCount++;
-				}
+			    boolean ok = u.round4_Verification_withJPBC(
+			        Crypto.pairing,
+			        Crypto.gElement,
+			        Crypto.hElement,
+			        finalResult.A,    // Element
+			        finalResult.B,
+			        finalResult.L,
+			        finalResult.Q,
+			        aggregated_phi_actual // BigInteger
+			    );
+			    if (ok) successCount++;
 			}
+			
 			System.out.printf("--- R4 Summary: %d / %d users PASSED verification.\n", successCount, U3.size());
 
 			// --- print the time table ---

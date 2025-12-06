@@ -8,6 +8,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
 
+import it.unisa.dia.gas.jpbc.Element;
+import it.unisa.dia.gas.jpbc.Pairing;
+import it.unisa.dia.gas.jpbc.PairingParameters;
+import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
+
+
 public class User {
 	public final int id;
 	public final BigInteger N_pk, N_sk, P_pk, P_sk;
@@ -117,7 +123,19 @@ public class User {
 		BigInteger Q_n = Crypto.power(Crypto.h, L_n_exponent);
 
 		ExecutionTimer.addClientTime(Round.R2, System.nanoTime() - startTime);
-		return new Round2Output(x_hat, A_n, B_n, L_n, Q_n, BigInteger.ONE);
+		//return new Round2Output(x_hat, A_n, B_n, L_n, Q_n, BigInteger.ONE);
+		// داخل User.round2_MaskedInput — پس از محاسبه hash_x_simplified و L_n_exponent (BigInteger)
+		Element zr_hash = Crypto.pairing.getZr().newElement().set(hash_x_simplified.mod(Crypto.EXP_MOD));
+		Element A_elem = Crypto.gElement.powZn(zr_hash).getImmutable();
+		Element B_elem = Crypto.hElement.powZn(zr_hash).getImmutable();
+
+		BigInteger r = Crypto.pairing.getZr().getOrder();
+		Element zr_Lexp = Crypto.pairing.getZr().newElement().set(L_n_exponent.mod(r));
+		Element L_elem = Crypto.gElement.powZn(zr_Lexp).getImmutable();
+		Element Q_elem = Crypto.hElement.powZn(zr_Lexp).getImmutable();
+
+		return new Round2Output(x_hat, A_elem, B_elem, L_elem, Q_elem, BigInteger.ONE);
+
 	}
 
 	// --- راند 3: حذف ماسک ---
@@ -155,50 +173,39 @@ public class User {
 		return new Round3Input(Nsk_shares, beta_shares);
 	}
 
-	// --- راند 4: وارسی (اصلاح شده برای رفع خطا) ---
-	public boolean round4_Verification(Round3Output serverResult, BigInteger aggregated_phi) {
-		long startTime = System.nanoTime();
-		BigInteger A = serverResult.A;
-		BigInteger B = serverResult.B;
-		BigInteger L = serverResult.L;
-		BigInteger proofQ = serverResult.Q;
+	// signature: aggregatedPhi is BigInteger (the computed exponent phi)
+	public boolean round4_Verification_withJPBC(
+	        Pairing pairing,
+	        Element g,
+	        Element h,
+	        Element A,
+	        Element B,
+	        Element L,
+	        Element proofQ,
+	        BigInteger aggregatedPhi) {
+		BigInteger r = pairing.getZr().getOrder();
+		aggregatedPhi = aggregatedPhi.mod(r);
+		
+	    Element leftA  = pairing.pairing(A, h);
+	    Element rightA = pairing.pairing(g, B);
+	    boolean eq_A = leftA.isEqual(rightA);
 
-		// --- شبیه‌سازی وارسی (اصلاح شده) ---
+	    // compute L^d and Q^d safely using Zr elements
+	    Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(pairing.getZr().getOrder()));
+	    Element L_d = L.duplicate().powZn(zr_d).getImmutable();
+	    Element Q_d = proofQ.duplicate().powZn(zr_d).getImmutable();
 
-		// (اصلاح شده) 1. eq_A: A^k == B
-		// e(A, h) = e(A, g^k) = e(A^k, g)
-		// e(g, B)
-		// A^k == B (در شبیه‌سازی ما)
-		boolean eq_A = A.modPow(Crypto.k, Crypto.Q).equals(B);
+	    boolean eq_B = pairing.pairing(L_d, h).isEqual(pairing.pairing(g, Q_d));
 
-		// (اصلاح شده) 2. eq_B: (L^d)^k == Q^d
-		// e(g, Q^d) = e(g, (h^exp)^d) = e(g, (g^k)^exp*d) = e(g,g)^(k*exp*d)
-		// e(L^d, h) = e((g^exp)^d, g^k) = e(g,g)^(exp*d*k)
-		BigInteger L_d = L.modPow(Crypto.d, Crypto.Q);
+	    Element zr_phi = pairing.getZr().newElement().set(aggregatedPhi);
+	    Element Phi_val = g.powZn(zr_phi).getImmutable();
+	    Element RHS_C = A.duplicate().mul(L_d).getImmutable();
+	    boolean eq_C = Phi_val.isEqual(RHS_C);
 
-		BigInteger Q_d = proofQ.modPow(Crypto.d, Crypto.Q);
-		boolean eq_B = L_d.modPow(Crypto.k, Crypto.Q).equals(Q_d);
-
-		// (اصلاح شده) 3. eq_C: g^phi == A * L^d
-		// Phi = g^phi
-		BigInteger Phi_val = Crypto.g.modPow(aggregated_phi.mod(Crypto.EXP_MOD), Crypto.Q);
-		// RHS = A * L^d = g^sum(HF) * g^(phi - sum(HF)) = g^phi
-		BigInteger RHS_C = A.multiply(L_d).mod(Crypto.Q);
-		boolean eq_C = Phi_val.equals(RHS_C);
-
-		boolean result = eq_A && eq_B && eq_C;
-		ExecutionTimer.addClientTime(Round.R4, System.nanoTime() - startTime);
-
-		System.out.printf("Debug (User %d): aggregated_phi=%s\n", id, aggregated_phi.mod(Crypto.EXP_MOD).toString());
-		System.out.printf("Debug (User %d): Phi_val=%s\n", id, Phi_val.toString());
-		System.out.printf("Debug (User %d): RHS_C = A * L^d = %s (A=%s, L_d=%s)\n", id, RHS_C.toString(), A.toString(),
-				L_d.toString());
-
-		if (!result) {
-			// چاپ جزئیات خطا در صورت شکست
-			System.out.printf("User %d (R4): Verification: FAILED (eqA: %b, eqB: %b, eqC: %b)\n", id, eq_A, eq_B, eq_C);
-		}
-		return result;
+	    boolean result = eq_A && eq_B && eq_C;
+	    // logging...
+	    System.out.println("A = "+eq_A+", B = "+eq_B+", C = "+eq_C+", res = "+result);
+	    return result;
 	}
 
 	// متد کمکی برای جمع بردارها
