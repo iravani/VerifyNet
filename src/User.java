@@ -71,6 +71,7 @@ public class User {
 	public Round2Output round2_MaskedInput(Map<Integer, String> P_m_n, List<User> U2, BigInteger tau, BigInteger delta,
 			BigInteger rho, BigInteger gamma_global, BigInteger nu_global) {
 		long startTime = System.nanoTime();
+		BigInteger r = Crypto.pairing.getZr().getOrder();
 
 		List<BigInteger> x_hat = new ArrayList<>(gradientSize);
 		Map<Integer, BigInteger> s_n_m_seeds = new HashMap<>();
@@ -114,9 +115,8 @@ public class User {
 		this.nu_n = new BigInteger(64, new SecureRandom()).mod(Crypto.EXP_MOD);
 
 		// (اصلاح شده) رفع خطای تقسیم بر d
-		BigInteger exponent = gamma_n.multiply(gamma_global).add(nu_n.multiply(nu_global)).mod(Crypto.EXP_MOD);
-
-		BigInteger L_n_exponent = exponent.subtract(hash_x_simplified).mod(Crypto.EXP_MOD);
+		BigInteger exponent = gamma_n.multiply(gamma_global).add(nu_n.multiply(nu_global)).mod(r);
+		BigInteger L_n_exponent = exponent.subtract(hash_x_simplified).mod(r).multiply(Crypto.d_inv.mod(r)).mod(r);
 		L_n_exponent = L_n_exponent.multiply(Crypto.d_inv).mod(Crypto.EXP_MOD);
 
 		BigInteger L_n = Crypto.power(Crypto.g, L_n_exponent);
@@ -129,8 +129,7 @@ public class User {
 		Element A_elem = Crypto.gElement.powZn(zr_hash).getImmutable();
 		Element B_elem = Crypto.hElement.powZn(zr_hash).getImmutable();
 
-		BigInteger r = Crypto.pairing.getZr().getOrder();
-		Element zr_Lexp = Crypto.pairing.getZr().newElement().set(L_n_exponent.mod(r));
+		Element zr_Lexp = Crypto.pairing.getZr().newElement().set(L_n_exponent);
 		Element L_elem = Crypto.gElement.powZn(zr_Lexp).getImmutable();
 		Element Q_elem = Crypto.hElement.powZn(zr_Lexp).getImmutable();
 
@@ -191,7 +190,7 @@ public class User {
 	    boolean eq_A = leftA.isEqual(rightA);
 
 	    // compute L^d and Q^d safely using Zr elements
-	    Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(pairing.getZr().getOrder()));
+	    Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(r));
 	    Element L_d = L.duplicate().powZn(zr_d).getImmutable();
 	    Element Q_d = proofQ.duplicate().powZn(zr_d).getImmutable();
 
