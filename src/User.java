@@ -1,217 +1,179 @@
 import java.math.BigInteger;
 import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 import java.util.stream.Collectors;
-
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Pairing;
-import it.unisa.dia.gas.jpbc.PairingParameters;
-import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
-
 
 public class User {
-	public final int id;
-	public final BigInteger N_pk, N_sk, P_pk, P_sk;
-	public List<BigInteger> localGradient; // x_n (برداری)
-	public BigInteger beta_n;
-	public BigInteger gamma_n, nu_n; // PF_K1(n)
-	private int gradientSize;
+    public final int id;
+    // کلیدهای عمومی/خصوصی حالا در G1 و Zr هستند
+    public final Element N_pk, N_sk_Zr;  // N_pk = g^{N_sk}, N_sk ∈ Zr
+    public final Element P_pk, P_sk_Zr;  // کلید موقت برای راند 1
 
-	public User(int id, BigInteger n_pk, BigInteger n_sk, BigInteger p_pk, BigInteger p_sk, int gradientSize) {
-		this.id = id;
-		this.N_pk = n_pk;
-		this.N_sk = n_sk;
-		this.P_pk = p_pk;
-		this.P_sk = p_sk;
-		this.gradientSize = gradientSize;
-		updateLocalGradient();
-	}
+    public List<BigInteger> localGradient;
+    public BigInteger beta_n;
+    public BigInteger gamma_n, nu_n;
+    private int gradientSize;
 
-	// متد برای به‌روزرسانی گرادیان در هر اپوک
-	public void updateLocalGradient() {
-		Random rand = new Random();
-		this.localGradient = new ArrayList<>(gradientSize);
-		for (int i = 0; i < gradientSize; i++) {
-			// مقادیر گرادیان باید در مدول Q باشند
-			this.localGradient.add(BigInteger.valueOf(id * 10 + rand.nextInt(5)).mod(Crypto.Q));
-		}
-	}
+    public User(int id, Element n_pk, Element n_sk_zr, Element p_pk, Element p_sk_zr, int gradientSize) {
+        this.id = id;
+        this.N_pk = n_pk.getImmutable();
+        this.N_sk_Zr = n_sk_zr.getImmutable();
+        this.P_pk = p_pk.getImmutable();
+        this.P_sk_Zr = p_sk_zr.getImmutable();
+        this.gradientSize = gradientSize;
+        updateLocalGradient();
+    }
 
-	// --- راند 1: اشتراک گذاری کلید ---
-	public Map<Integer, String> round1_KeySharing(List<User> U1, int t) {
-		long startTime = System.nanoTime();
+    public void updateLocalGradient() {
+        Random rand = new Random(id); // برای تکرارپذیری
+        this.localGradient = new ArrayList<>(gradientSize);
+        for (int i = 0; i < gradientSize; i++) {
+            this.localGradient.add(BigInteger.valueOf(id * 10 + rand.nextInt(5)).mod(Crypto.Q));
+        }
+    }
 
-		beta_n = new BigInteger(64, new SecureRandom()).mod(Crypto.Q);
+    // --- راند 1: اشتراک گذاری کلید ---
+    public Map<Integer, String> round1_KeySharing(List<User> U1, int t) {
+        long startTime = System.nanoTime();
+        beta_n = new BigInteger(64, new SecureRandom()).mod(Crypto.Q);
 
-		List<Integer> userIds = U1.stream().map(u -> u.id).collect(Collectors.toList());
-		List<Crypto.ShamirPoint> beta_shares = Crypto.S_share(beta_n, t, userIds);
-		List<Crypto.ShamirPoint> Nsk_shares = Crypto.S_share(N_sk, t, userIds);
+        List<Integer> userIds = U1.stream().map(u -> u.id).collect(Collectors.toList());
+        List<Crypto.ShamirPoint> beta_shares = Crypto.S_share(beta_n, t, userIds);
+        List<Crypto.ShamirPoint> Nsk_shares = Crypto.S_share(new BigInteger(N_sk_Zr.toBytes()), t, userIds);
 
-		Map<Integer, String> p_n_m = new HashMap<>();
-		for (int i = 0; i < U1.size(); i++) {
-			User m = U1.get(i);
-			BigInteger sharedKey = Crypto.KA_agree(this.P_sk, m.P_pk);
+        Map<Integer, String> p_n_m = new HashMap<>();
+        for (User m : U1) {
+            // Key Agreement در G1
+            Element sharedKeyElement = Crypto.KA_agree(this.P_sk_Zr, m.P_pk);
+            BigInteger sharedKey = new BigInteger(1, sharedKeyElement.toBytes()).mod(Crypto.Q);
 
-			// (اصلاح شده) ارسال کامل سهم (x و y)
-			String message = String.format("%d|%d|%s|%s", this.id, m.id, Nsk_shares.get(i).toString(),
-					beta_shares.get(i).toString());
-			p_n_m.put(m.id, Crypto.AE_enc(sharedKey, message));
-		}
+            int idx = userIds.indexOf(m.id);
+            String message = String.format("%d|%d|%s|%s",
+                    this.id, m.id,
+                    Nsk_shares.get(idx).toString(),
+                    beta_shares.get(idx).toString());
 
-		ExecutionTimer.addClientTime(Round.R1, System.nanoTime() - startTime);
-		return p_n_m;
-	}
+            p_n_m.put(m.id, Crypto.AE_enc(sharedKey, message));
+        }
+        ExecutionTimer.addClientTime(Round.R1, System.nanoTime() - startTime);
+        return p_n_m;
+    }
 
-	// --- راند 2: ورودی ماسک‌گذاری شده ---
-	public Round2Output round2_MaskedInput(Map<Integer, String> P_m_n, List<User> U2, BigInteger tau, BigInteger delta,
-			BigInteger rho, BigInteger gamma_global, BigInteger nu_global) {
-		long startTime = System.nanoTime();
-		BigInteger r = Crypto.pairing.getZr().getOrder();
+    // --- راند 2: ورودی ماسک‌گذاری شده (اصلاح نهایی) ---
+    public Round2Output round2_MaskedInput(Map<Integer, String> P_m_n, List<User> U2, BigInteger tau,
+                                           BigInteger delta, BigInteger rho,
+                                           BigInteger gamma_global, BigInteger nu_global) {
+        long startTime = System.nanoTime();
 
-		List<BigInteger> x_hat = new ArrayList<>(gradientSize);
-		Map<Integer, BigInteger> s_n_m_seeds = new HashMap<>();
-		for (User m : U2) {
-			if (m.id != this.id) {
-				s_n_m_seeds.put(m.id, Crypto.KA_agree(this.N_sk, m.N_pk));
-			}
-		}
+        List<BigInteger> x_hat = new ArrayList<>(gradientSize);
+        Map<Integer, BigInteger> s_n_m_seeds = new HashMap<>();
 
-		// --- ماسک‌گذاری برداری ---
-		List<BigInteger> prg_beta_vector = Crypto.PRG(beta_n, gradientSize);
-		List<BigInteger> prg_s_positive_sum = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
-		List<BigInteger> prg_s_negative_sum = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        for (User m : U2) {
+            if (m.id != this.id) {
+                Element seedElement = Crypto.KA_agree(this.N_sk_Zr, m.N_pk);
+                BigInteger seed = new BigInteger(1, seedElement.toBytes()).mod(Crypto.Q);
+                s_n_m_seeds.put(m.id, seed);
+            }
+        }
 
-		for (User m : U2) {
-			if (m.id == this.id)
-				continue;
-			BigInteger s_val = s_n_m_seeds.get(m.id);
-			List<BigInteger> prg_s_vector = Crypto.PRG(s_val, gradientSize);
+        // ماسک‌گذاری (درست)
+        List<BigInteger> prg_beta = Crypto.PRG(beta_n, gradientSize);
+        List<BigInteger> pos = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        List<BigInteger> neg = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
 
-			if (this.id < m.id) {
-				prg_s_positive_sum = addVectors(prg_s_positive_sum, prg_s_vector);
-			} else {
-				prg_s_negative_sum = addVectors(prg_s_negative_sum, prg_s_vector);
-			}
-		}
+        for (User m : U2) {
+            if (m.id == this.id) continue;
+            BigInteger seed = s_n_m_seeds.get(m.id);
+            List<BigInteger> prg_s = Crypto.PRG(seed, gradientSize);
+            if (this.id < m.id) {
+                pos = addVectors(pos, prg_s);
+            } else {
+                neg = addVectors(neg, prg_s);
+            }
+        }
 
-		for (int i = 0; i < gradientSize; i++) {
-			BigInteger masked_x_i = localGradient.get(i).add(prg_beta_vector.get(i)).add(prg_s_positive_sum.get(i))
-					.subtract(prg_s_negative_sum.get(i)).mod(Crypto.Q);
-			x_hat.add(masked_x_i);
-		}
+        for (int i = 0; i < gradientSize; i++) {
+            BigInteger masked = localGradient.get(i)
+                    .add(prg_beta.get(i))
+                    .add(pos.get(i))
+                    .subtract(neg.get(i))
+                    .mod(Crypto.Q);
+            x_hat.add(masked);
+        }
 
-		// --- محاسبه اثبات‌ها (بر اساس المان اول) ---
-		// (اصلاح شده) اثبات‌ها باید بر اساس گرادیان واقعی باشند
-		BigInteger hash_x_simplified = Crypto.HF(localGradient.get(0), delta, rho).mod(Crypto.EXP_MOD);
-		BigInteger A_n = Crypto.power(Crypto.g, hash_x_simplified);
-		BigInteger B_n = Crypto.power(Crypto.h, hash_x_simplified);
+        // --- تعهد pairing-based (درست) ---
+        Element r_i = Crypto.pairing.getZr().newRandomElement().getImmutable();
+        Element s_i = Crypto.pairing.getZr().newRandomElement().getImmutable();
+        Element t_i = Crypto.pairing.getZr().newRandomElement().getImmutable();
 
-		this.gamma_n = new BigInteger(64, new SecureRandom()).mod(Crypto.EXP_MOD);
-		this.nu_n = new BigInteger(64, new SecureRandom()).mod(Crypto.EXP_MOD);
+        Element x_i_Zr = Crypto.toZr(localGradient.get(0));
 
-		// (اصلاح شده) رفع خطای تقسیم بر d
-		BigInteger exponent = gamma_n.multiply(gamma_global).add(nu_n.multiply(nu_global)).mod(r);
-		BigInteger L_n_exponent = exponent.subtract(hash_x_simplified).mod(r).multiply(Crypto.d_inv.mod(r)).mod(r);
-		L_n_exponent = L_n_exponent.multiply(Crypto.d_inv).mod(Crypto.EXP_MOD);
+        Element A = Crypto.g.powZn(r_i).getImmutable();
+        Element B = Crypto.h.powZn(r_i).mul(Crypto.g.powZn(x_i_Zr)).getImmutable();
+        Element L = Crypto.g.powZn(s_i).getImmutable();
 
-		BigInteger L_n = Crypto.power(Crypto.g, L_n_exponent);
-		BigInteger Q_n = Crypto.power(Crypto.h, L_n_exponent);
+        this.gamma_n = new BigInteger(64, new SecureRandom()).mod(Crypto.r);
+        this.nu_n = new BigInteger(64, new SecureRandom()).mod(Crypto.r);
+        BigInteger phi_i = gamma_n.multiply(gamma_global).add(nu_n.multiply(nu_global)).mod(Crypto.r);
+        Element phi_i_Zr = Crypto.toZr(phi_i);
 
-		ExecutionTimer.addClientTime(Round.R2, System.nanoTime() - startTime);
-		//return new Round2Output(x_hat, A_n, B_n, L_n, Q_n, BigInteger.ONE);
-		// داخل User.round2_MaskedInput — پس از محاسبه hash_x_simplified و L_n_exponent (BigInteger)
-		Element zr_hash = Crypto.pairing.getZr().newElement().set(hash_x_simplified.mod(r));
-		Element A_elem = Crypto.gElement.powZn(zr_hash).getImmutable();
-		Element B_elem = Crypto.hElement.powZn(zr_hash).getImmutable();
+        Element Q = Crypto.g.powZn(t_i).mul(Crypto.g.powZn(phi_i_Zr.duplicate().negate())).getImmutable();
 
-		Element zr_Lexp = Crypto.pairing.getZr().newElement().set(L_n_exponent);
-		Element L_elem = Crypto.gElement.powZn(zr_Lexp).getImmutable();
-		Element Q_elem = Crypto.hElement.powZn(zr_Lexp).getImmutable();
+        ExecutionTimer.addClientTime(Round.R2, System.nanoTime() - startTime);
+        return new Round2Output(x_hat, A, B, L, Q, phi_i);
+    }
 
-		return new Round2Output(x_hat, A_elem, B_elem, L_elem, Q_elem, BigInteger.ONE);
+    // --- راند 3: حذف ماسک ---
+    public Round3Input round3_Unmasking(Map<Integer, String> P_m_n, List<User> U3) {
+        long startTime = System.nanoTime();
+        Map<Integer, Crypto.ShamirPoint> Nsk_shares = new HashMap<>();
+        Map<Integer, Crypto.ShamirPoint> beta_shares = new HashMap<>();
 
-	}
+        for (User m : U3) {
+            int key = this.id * 1000 + m.id;
+            if (P_m_n.containsKey(key)) {
+                Element sharedKeyElement = Crypto.KA_agree(this.P_sk_Zr, m.P_pk);
+                BigInteger sharedKey = new BigInteger(1, sharedKeyElement.toBytes()).mod(Crypto.Q);
+                String decrypted = Crypto.AE_dec(sharedKey, P_m_n.get(key));
+                if (decrypted != null && decrypted.split("\\|").length == 4) {
+                    String[] p = decrypted.split("\\|");
+                    Crypto.ShamirPoint nsk = Crypto.ShamirPoint.fromString(p[2]);
+                    Crypto.ShamirPoint beta = Crypto.ShamirPoint.fromString(p[3]);
+                    if (nsk != null) Nsk_shares.put(m.id, nsk);
+                    if (beta != null) beta_shares.put(m.id, beta);
+                }
+            }
+        }
+        ExecutionTimer.addClientTime(Round.R3, System.nanoTime() - startTime);
+        return new Round3Input(Nsk_shares, beta_shares);
+    }
 
-	// --- راند 3: حذف ماسک ---
-	public Round3Input round3_Unmasking(Map<Integer, String> P_m_n, List<User> U3) {
-		long startTime = System.nanoTime();
-		// (اصلاح شده) ذخیره نقاط شامیر
-		Map<Integer, Crypto.ShamirPoint> Nsk_shares = new HashMap<>();
-		Map<Integer, Crypto.ShamirPoint> beta_shares = new HashMap<>();
+    // --- راند 4: Verification (درست) ---
+    public boolean round4_Verification_withJPBC(Pairing pairing, Element g, Element h,
+                                                Element A, Element B, Element L, Element Q,
+                                                BigInteger phi_total) {
+        Element left = pairing.pairing(A, h).getImmutable();
 
-		for (User m : U3) {
-			// کلید برای رمزگشایی پیام‌هایی که m (فرستنده) برای n (this.id - گیرنده) فرستاده
-			// است
-			int key = this.id * 1000 + m.id;
+        Element phiZr = Crypto.toZr(phi_total);
+        Element g_phi = g.powZn(phiZr).getImmutable();
 
-			if (P_m_n.containsKey(key)) {
-				BigInteger sharedKey = Crypto.KA_agree(this.P_sk, m.P_pk);
-				String decrypted = Crypto.AE_dec(sharedKey, P_m_n.get(key));
+        Element right = pairing.pairing(B, g)
+                .mul(pairing.pairing(L, g_phi))
+                .mul(pairing.pairing(Q, g))
+                .getImmutable();
 
-				if (decrypted != null) {
-					String[] parts = decrypted.split("\\|");
-					if (parts.length == 6) {
-						// id_n(m) | id_m(this) | Nsk.toString() | beta.toString()
-						Crypto.ShamirPoint nsk_point = Crypto.ShamirPoint.fromString(parts[2] + "|" + parts[3]);
-						Crypto.ShamirPoint beta_point = Crypto.ShamirPoint.fromString(parts[4] + "|" + parts[5]);
+        boolean result = left.isEqual(right);
+        System.out.println("User " + id + " Verification: " + result);
+        return result;
+    }
 
-						if (nsk_point != null && beta_point != null) {
-							Nsk_shares.put(m.id, nsk_point);
-							beta_shares.put(m.id, beta_point);
-						}
-					}
-				}
-			}
-		}
-		ExecutionTimer.addClientTime(Round.R3, System.nanoTime() - startTime);
-		return new Round3Input(Nsk_shares, beta_shares);
-	}
-
-	// signature: aggregatedPhi is BigInteger (the computed exponent phi)
-	public boolean round4_Verification_withJPBC(
-	        Pairing pairing,
-	        Element g,
-	        Element h,
-	        Element A,
-	        Element B,
-	        Element L,
-	        Element proofQ,
-	        BigInteger aggregatedPhi) {
-		BigInteger r = pairing.getZr().getOrder();
-		aggregatedPhi = aggregatedPhi.mod(r);
-		
-		Element leftA  = pairing.pairing(A, h);
-		Element rightA = pairing.pairing(g, B);
-		boolean eq_A = leftA.isEqual(rightA);
-
-	    // compute L^d and Q^d safely using Zr elements
-		Element zr_d = pairing.getZr().newElement().set(Crypto.d.mod(r));
-		Element L_d = L.duplicate().powZn(zr_d).getImmutable();
-		Element Q_d = proofQ.duplicate().powZn(zr_d).getImmutable();
-		boolean eq_B = pairing.pairing(L_d, h).isEqual(pairing.pairing(g, Q_d));
-
-		Element zr_phi = pairing.getZr().newElement().set(aggregatedPhi.mod(r));
-		Element Phi_val = Crypto.gElement.powZn(zr_phi).getImmutable();
-		Element RHS_C = A.duplicate().mul(L_d).getImmutable();
-		boolean eq_C = Phi_val.isEqual(RHS_C);
-
-	    boolean result = eq_A && eq_B && eq_C;
-	    // logging...
-	    System.out.println("A = "+eq_A+", B = "+eq_B+", C = "+eq_C+", res = "+result);
-	    return result;
-	}
-
-	// متد کمکی برای جمع بردارها
-	private List<BigInteger> addVectors(List<BigInteger> v1, List<BigInteger> v2) {
-		List<BigInteger> result = new ArrayList<>(v1.size());
-		for (int i = 0; i < v1.size(); i++) {
-			result.add(v1.get(i).add(v2.get(i)).mod(Crypto.Q));
-		}
-		return result;
-	}
+    private List<BigInteger> addVectors(List<BigInteger> a, List<BigInteger> b) {
+        List<BigInteger> res = new ArrayList<>();
+        for (int i = 0; i < a.size(); i++) {
+            res.add(a.get(i).add(b.get(i)).mod(Crypto.Q));
+        }
+        return res;
+    }
 }

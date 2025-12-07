@@ -5,212 +5,161 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
-
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-
-import it.unisa.dia.gas.jpbc.Pairing;
 import it.unisa.dia.gas.jpbc.Element;
+import it.unisa.dia.gas.jpbc.Pairing;
 
 public class Crypto {
-	public static final int LAMDA = 256;
-	public static final int AES_KEY_BYTES = 32;
-	static SecureRandom sRand = new SecureRandom();
-	// پارامترهای عمومی
-	public static final BigInteger g = BigInteger.valueOf(7);
-	public static final BigInteger Q = BigInteger.probablePrime(LAMDA, sRand); // مرتبه گروه (prime order)
+    public static final int LAMDA = 256;
+    public static final int AES_KEY_BYTES = 32;
+    private static final SecureRandom sRand = new SecureRandom();
 
-	public static final BigInteger EXP_MOD = Q.subtract(BigInteger.ONE);
+    // --- فقط از pairing استفاده می‌کنیم ---
+    public static Pairing pairing = null;
+    public static Element g = null;        // g ∈ G1
+    public static Element h = null;        // h = g^k
+    public static BigInteger r = null;     // order of G1 (prime)
 
-	// (اصلاح شده) k مخفی برای تعریف h
-	public static final BigInteger k = BigInteger.probablePrime(LAMDA, sRand); // k مخفی
-	public static final BigInteger h = g.modPow(k, Q); // h = g^k
-
-	// (اصلاح شده) d = 3 (اطمینان از وجود معکوس پیمانه‌ای)
-	public static final BigInteger d;
-	public static final BigInteger d_inv;
-
-	static {
-	    // دقت: EXP_MOD قبلاً تعریف شده است (Q-1)
-	    BigInteger candidate = BigInteger.valueOf(3);
-	    // اگر خواستی می‌توانی از یک SecureRandom برای انتخاب تصادفی استفاده کنی
-	    while (!candidate.gcd(EXP_MOD).equals(BigInteger.ONE)) {
-	        candidate = candidate.add(BigInteger.ONE); // یا candidate = candidate.nextProbablePrime();
-	    }
-	    d = candidate;
-	    d_inv = d.modInverse(EXP_MOD); // الان امن است چون gcd(d, EXP_MOD) == 1
-	}
-
-	// برای رمزنگاری متقارن
-	private static final String AES_MODE = "AES/CBC/PKCS5Padding";
-
-	public static Pairing pairing = null;
-    public static Element gElement = null;
-    public static Element hElement = null;
+    // برای PRG و Shamir هنوز به یک عدد بزرگ mod Q نیاز داریم
+    public static final BigInteger Q = BigInteger.probablePrime(254, sRand); // کمی کوچکتر از 256 بیت برای ایمنی
 
     public static void initPairing(Pairing p, Element gEl, Element hEl) {
         pairing = p;
-        gElement = gEl.getImmutable();
-        hElement = hEl.getImmutable();
+        g = gEl.getImmutable();
+        h = hEl.getImmutable();
+        r = pairing.getG1().getOrder();  // مرتبه گروه G1
     }
-	// --- توابع ریاضی و گروهی ---
 
-	public static BigInteger power(BigInteger base, BigInteger exponent) {
-		BigInteger expReduced = exponent.mod(EXP_MOD); // reduce exponent modulo Q-1
-		return base.modPow(expReduced, Q);
-	}
+    // --- توابع گروهی با JPBC ---
+    public static Element pow(Element base, BigInteger exponent) {
+        Element expZr = pairing.getZr().newElement().set(exponent.mod(r));
+        return base.duplicate().powZn(expZr).getImmutable();
+    }
 
-	public static BigInteger KA_agree(BigInteger sk, BigInteger pk) {
-		return power(pk, sk);
-	}
+    public static Element pow(Element base, Element exponentZr) {
+        return base.duplicate().powZn(exponentZr.duplicate()).getImmutable();
+    }
 
-	public static BigInteger HF(BigInteger x, BigInteger delta, BigInteger rho) {
-		return delta.multiply(x).add(rho).mod(Q);
-	}
+    // --- Key Agreement در G1 ---
+    public static Element KA_agree(Element sk_Zr, Element pk_G1) {
+        return pk_G1.duplicate().powZn(sk_Zr.duplicate()).getImmutable(); // g^(sk1 * sk2)
+    }
 
-	// PRG (تغییر یافته برای تولید بردار)
-	public static List<BigInteger> PRG(BigInteger seed, int size) {
-		List<BigInteger> vector = new ArrayList<>(size);
-		try {
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
-			for (int i = 0; i < size; i++) {
-				byte[] seedBytes = seed.add(BigInteger.valueOf(i)).toByteArray();
-				byte[] hash = digest.digest(seedBytes);
-				vector.add(new BigInteger(1, Arrays.copyOfRange(hash, 0, 16)).mod(Q));
-			}
-			return vector;
-		} catch (Exception e) {
-			throw new RuntimeException("PRG failed", e);
-		}
-	}
+    // تبدیل BigInteger به Zr
+    public static Element toZr(BigInteger x) {
+        Element e = pairing.getZr().newElement();
+        e.set(x.mod(r));
+        return e.getImmutable();
+    }
 
-	// (توابع AE.enc/dec بدون تغییر باقی می‌مانند)
-	private static SecretKeySpec getAesKey(BigInteger KA_Key) {
+    // --- PRG: seed → vector of BigInteger (mod Q) ---
+    public static List<BigInteger> PRG(BigInteger seed, int size) {
+        List<BigInteger> vector = new ArrayList<>(size);
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (int i = 0; i < size; i++) {
+                byte[] input = seed.add(BigInteger.valueOf(i)).toByteArray();
+                byte[] hash = digest.digest(input);
+                BigInteger val = new BigInteger(1, Arrays.copyOf(hash, 16)).mod(Q);
+                vector.add(val);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("PRG failed", e);
+        }
+        return vector;
+    }
+
+    // --- AE Encryption/Decryption ---
+    private static final String AES_MODE = "AES/CBC/PKCS5Padding";
+
+    private static SecretKeySpec getAesKey(BigInteger kaKey) {
         try {
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
-            byte[] key = sha.digest(KA_Key.toByteArray()); // این همیشه 32 بایت خروجی می‌دهد
-            // Debug (اختیاری)
-            // System.out.println("SHA-256 output length: " + key.length + ", AES_KEY_BYTES=" + AES_KEY_BYTES);
-
-            if (AES_KEY_BYTES != 16 && AES_KEY_BYTES != 24 && AES_KEY_BYTES != 32) {
-                throw new IllegalArgumentException("AES_KEY_BYTES must be 16, 24, or 32");
-            }
-
-            // Arrays.copyOf به‌طور خودکار اگر AES_KEY_BYTES <= key.length کار می‌کند
-            byte[] keyBytes = Arrays.copyOf(key, AES_KEY_BYTES);
-            return new SecretKeySpec(keyBytes, "AES");
+            byte[] key = sha.digest(kaKey.toByteArray());
+            return new SecretKeySpec(Arrays.copyOf(key, AES_KEY_BYTES), "AES");
         } catch (Exception e) {
-            throw new RuntimeException("Key generation failed", e);
+            throw new RuntimeException(e);
         }
     }
-	
-	public static String AE_enc(BigInteger KA_Key, String message) {
+
+    public static String AE_enc(BigInteger kaKey, String message) {
         try {
-            SecretKeySpec secretKey = getAesKey(KA_Key);
+            SecretKeySpec key = getAesKey(kaKey);
             Cipher cipher = Cipher.getInstance(AES_MODE);
-            SecureRandom random = new SecureRandom();
-            byte[] iv = new byte[cipher.getBlockSize()];
-            random.nextBytes(iv);
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey, new IvParameterSpec(iv));
-            byte[] encryptedData = cipher.doFinal(message.getBytes("UTF-8"));
-            String ivBase64 = Base64.getEncoder().encodeToString(iv);
-            String dataBase64 = Base64.getEncoder().encodeToString(encryptedData);
-            return ivBase64 + ":" + dataBase64;
+            byte[] iv = new byte[16];
+            sRand.nextBytes(iv);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(iv));
+            byte[] encrypted = cipher.doFinal(message.getBytes("UTF-8"));
+            return Base64.getEncoder().encodeToString(iv) + ":" +
+                   Base64.getEncoder().encodeToString(encrypted);
         } catch (Exception e) {
             throw new RuntimeException("Encryption failed", e);
         }
     }
 
-	public static String AE_dec(BigInteger KA_Key, String encrypted) {
+    public static String AE_dec(BigInteger kaKey, String encrypted) {
         try {
-            String[] parts = encrypted.split(":");
-            if (parts.length != 2)
-                throw new IllegalArgumentException("Invalid encrypted format");
+            String[] parts = encrypted.split(":", 2);
             byte[] iv = Base64.getDecoder().decode(parts[0]);
-            byte[] encryptedData = Base64.getDecoder().decode(parts[1]);
-            SecretKeySpec secretKey = getAesKey(KA_Key);
+            byte[] data = Base64.getDecoder().decode(parts[1]);
+            SecretKeySpec key = getAesKey(kaKey);
             Cipher cipher = Cipher.getInstance(AES_MODE);
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(iv));
-            byte[] decryptedData = cipher.doFinal(encryptedData);
-            return new String(decryptedData, "UTF-8");
+            cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
+            return new String(cipher.doFinal(data), "UTF-8");
         } catch (Exception e) {
-            e.printStackTrace(); // لاگ برای دیباگ
-            return null; // یا می‌توانی Exception پرتاب کنی
+            return null;
         }
     }
 
-	// --- توابع اشتراک راز شامیر (S.share/S.recon) ---
+    // --- Shamir Secret Sharing (mod Q) ---
+    public static class ShamirPoint {
+        public final BigInteger x, y;
+        public ShamirPoint(BigInteger x, BigInteger y) { this.x = x; this.y = y; }
+        @Override public String toString() { return x + "|" + y; }
+        public static ShamirPoint fromString(String s) {
+            String[] p = s.split("\\|", 2);
+            return p.length == 2 ? new ShamirPoint(new BigInteger(p[0]), new BigInteger(p[1])) : null;
+        }
+    }
 
-	// (اصلاح شده)
-	public static class ShamirPoint {
-		public final BigInteger x;
-		public final BigInteger y;
+    public static List<ShamirPoint> S_share(BigInteger secret, int t, List<Integer> indices) {
+        int deg = t - 1;
+        List<BigInteger> coeffs = new ArrayList<>();
+        coeffs.add(secret);
+        for (int i = 1; i <= deg; i++) {
+            coeffs.add(new BigInteger(Q.bitLength(), sRand).mod(Q));
+        }
+        List<ShamirPoint> shares = new ArrayList<>();
+        for (Integer idx : indices) {
+            BigInteger x = BigInteger.valueOf(idx);
+            BigInteger y = BigInteger.ZERO;
+            BigInteger xpow = BigInteger.ONE;
+            for (BigInteger c : coeffs) {
+                y = y.add(c.multiply(xpow)).mod(Q);
+                xpow = xpow.multiply(x).mod(Q);
+            }
+            shares.add(new ShamirPoint(x, y));
+        }
+        return shares;
+    }
 
-		ShamirPoint(BigInteger x, BigInteger y) {
-			this.x = x;
-			this.y = y;
-		}
-
-		@Override
-		public String toString() {
-			return x + "|" + y;
-		}
-
-		public static ShamirPoint fromString(String s) {
-			String[] parts = s.split("\\|");
-			if (parts.length != 2)
-				return null;
-			return new ShamirPoint(new BigInteger(parts[0]), new BigInteger(parts[1]));
-		}
-	}
-
-	public static List<ShamirPoint> S_share(BigInteger secret, int t, List<Integer> uIndices) {
-		int degree = t - 1;
-		List<BigInteger> coeffs = new ArrayList<>();
-		coeffs.add(secret); // a_0 = راز
-		SecureRandom random = new SecureRandom();
-		for (int i = 1; i <= degree; i++) {
-			coeffs.add(new BigInteger(Q.bitLength(), random).mod(Q.subtract(BigInteger.ONE)).add(BigInteger.ONE));
-		}
-
-		List<ShamirPoint> shares = new ArrayList<>();
-		for (Integer index : uIndices) {
-			BigInteger x = BigInteger.valueOf(index);
-			BigInteger y = BigInteger.ZERO;
-			for (int j = 0; j <= degree; j++) {
-				BigInteger term = coeffs.get(j).multiply(x.modPow(BigInteger.valueOf(j), Q)).mod(Q);
-				y = y.add(term).mod(Q);
-			}
-			shares.add(new ShamirPoint(x, y));
-		}
-		return shares;
-	}
-
-	public static BigInteger S_recon(List<ShamirPoint> shares, int t) {
-		if (shares.size() < t) {
-			throw new IllegalArgumentException("Not enough shares (t = " + t + ", provided = " + shares.size() + ")");
-		}
-		List<ShamirPoint> tShares = shares.subList(0, t);
-		BigInteger secret = BigInteger.ZERO;
-
-		for (int i = 0; i < t; i++) {
-			BigInteger xi = tShares.get(i).x;
-			BigInteger yi = tShares.get(i).y;
-			BigInteger numerator = BigInteger.ONE;
-			BigInteger denominator = BigInteger.ONE;
-
-			for (int j = 0; j < t; j++) {
-				if (i != j) {
-					BigInteger xj = tShares.get(j).x;
-					numerator = numerator.multiply(xj.negate()).mod(Q);
-					denominator = denominator.multiply(xi.subtract(xj)).mod(Q);
-				}
-			}
-			BigInteger inverseDenominator = denominator.modInverse(Q);
-			BigInteger lagrangeCoefficient = numerator.multiply(inverseDenominator).mod(Q);
-			secret = secret.add(yi.multiply(lagrangeCoefficient)).mod(Q);
-		}
-		return secret;
-	}
+    public static BigInteger S_recon(List<ShamirPoint> shares, int t) {
+        BigInteger secret = BigInteger.ZERO;
+        for (int i = 0; i < t; i++) {
+            BigInteger xi = shares.get(i).x;
+            BigInteger yi = shares.get(i).y;
+            BigInteger num = BigInteger.ONE, den = BigInteger.ONE;
+            for (int j = 0; j < t; j++) {
+                if (i == j) continue;
+                BigInteger xj = shares.get(j).x;
+                num = num.multiply(xj.negate()).mod(Q);
+                den = den.multiply(xi.subtract(xj)).mod(Q);
+            }
+            BigInteger lambda = num.multiply(den.modInverse(Q)).mod(Q);
+            secret = secret.add(yi.multiply(lambda)).mod(Q);
+        }
+        return secret;
+    }
 }

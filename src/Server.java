@@ -1,160 +1,143 @@
 import java.math.BigInteger;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import it.unisa.dia.gas.jpbc.Pairing;
-import it.unisa.dia.gas.jpbc.PairingParameters;
-import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
-import it.unisa.dia.gas.plaf.jpbc.pairing.a.TypeACurveGenerator;
+import java.util.*;
 import it.unisa.dia.gas.jpbc.Element;
 
 public class Server {
-	public List<User> U1;
-	public BigInteger tau;
-	private int gradientSize;
+    public List<User> U1;
+    public BigInteger tau;
+    private int gradientSize;
 
-	public void round0_Initialization(List<User> allUsers, int t, double dropoutRate, int gradientSize) {
-		long startTime = System.nanoTime();
-		this.gradientSize = gradientSize;
-		List<User> participants = VerifyNetProtocol.filterUsersByDropout(allUsers, dropoutRate);
+    public void round0_Initialization(List<User> allUsers, int t, double dropoutRate, int gradientSize) {
+        long startTime = System.nanoTime();
+        this.gradientSize = gradientSize;
+        List<User> participants = VerifyNetProtocol.filterUsersByDropout(allUsers, dropoutRate);
+        this.U1 = (participants.size() < t) ? new ArrayList<>() : participants;
+        this.tau = BigInteger.valueOf(this.U1.stream().mapToInt(u -> u.id).sum());
+        ExecutionTimer.addServerTime(Round.R0, System.nanoTime() - startTime);
+    }
 
-		if (participants.size() < t) {
-			this.U1 = new ArrayList<>(); // لیست خالی
-		} else {
-			this.U1 = participants;
-		}
-		this.tau = BigInteger.valueOf(this.U1.stream().mapToInt(u -> u.id).sum());
-		ExecutionTimer.addServerTime(Round.R0, System.nanoTime() - startTime);
-	}
+    public Map<Integer, String> round1_KeySharing(Map<Integer, Map<Integer, String>> all_P_n_m) {
+        long startTime = System.nanoTime();
+        Map<Integer, String> P_m_n_all = new HashMap<>();
+        for (var entry : all_P_n_m.entrySet()) {
+            for (var inner : entry.getValue().entrySet()) {
+                P_m_n_all.put(inner.getKey() * 1000 + entry.getKey(), inner.getValue());
+            }
+        }
+        ExecutionTimer.addServerTime(Round.R1, System.nanoTime() - startTime);
+        return P_m_n_all;
+    }
 
-	// --- راند 1: اشتراک گذاری کلید ---
-	public Map<Integer, String> round1_KeySharing(Map<Integer, Map<Integer, String>> all_P_n_m) {
-		long startTime = System.nanoTime();
-		Map<Integer, String> P_m_n_all = new HashMap<>();
-		for (Map.Entry<Integer, Map<Integer, String>> entry : all_P_n_m.entrySet()) {
-			for (Map.Entry<Integer, String> innerEntry : entry.getValue().entrySet()) {
-				P_m_n_all.put(innerEntry.getKey() * 1000 + entry.getKey(), innerEntry.getValue());
-			}
-		}
-		ExecutionTimer.addServerTime(Round.R1, System.nanoTime() - startTime);
-		return P_m_n_all;
-	}
+    public Round3Output round3_UnmaskingAndAggregation(
+            Map<Integer, Round2Output> round2Outputs,
+            Map<Integer, Round3Input> round3Inputs,
+            List<User> U3, int t) {
 
-	// --- راند 3: حذف ماسک (اصلاح شده) ---
-	public Round3Output round3_UnmaskingAndAggregation(Map<Integer, Round2Output> round2Outputs,
-			Map<Integer, Round3Input> round3Inputs, List<User> U3, // کاربران بازمانده نهایی
-			int t) {
-		long startTime = System.nanoTime();
+        long startTime = System.nanoTime();
 
-		// --- 1. تجمیع گرادیان‌های ماسک‌گذاری شده (برداری) ---
-		List<BigInteger> sum_X_hat = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
-		for (User u : U3) {
-			Round2Output output = round2Outputs.get(u.id);
-			if (output != null) {
-				sum_X_hat = addVectors(sum_X_hat, output.x_hat);
-			}
-		}
+        // 1. جمع X_hat و φ_total
+        List<BigInteger> sum_X_hat = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        BigInteger phi_total = BigInteger.ZERO;
 
-		// --- 2. بازسازی رازها و محاسبه ماسک‌ها (برداری) ---
-		List<BigInteger> sum_PRG_beta = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
-		List<BigInteger> sum_PRG_s_positive = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
-		List<BigInteger> sum_PRG_s_negative = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        Element aggA = Crypto.pairing.getG1().newOneElement().getImmutable();
+        Element aggB = Crypto.pairing.getG1().newOneElement().getImmutable();
+        Element aggL = Crypto.pairing.getG1().newOneElement().getImmutable();
+        Element aggQ = Crypto.pairing.getG1().newOneElement().getImmutable();
 
-		Map<Integer, BigInteger> reconstructed_N_sk = new HashMap<>();
+        for (User u : U3) {
+            Round2Output out = round2Outputs.get(u.id);
+            if (out != null) {
+                sum_X_hat = addVectors(sum_X_hat, out.x_hat);
+                phi_total = phi_total.add(out.phi_i).mod(Crypto.r);  // درست: mod r
 
-		// (اصلاح شده) منطق بازسازی
-		for (User u_n : U3) { // برای هر کاربر n که باید رازش بازسازی شود
+                aggA = aggA.duplicate().mul(out.A).getImmutable();
+                aggB = aggB.duplicate().mul(out.B).getImmutable();
+                aggL = aggL.duplicate().mul(out.L).getImmutable();
+                aggQ = aggQ.duplicate().mul(out.Q).getImmutable();
+            }
+        }
 
-			// ب) بازسازی beta_n
-			List<Crypto.ShamirPoint> betaSharesFor_n = new ArrayList<>();
-			for (User u_m : U3) { // سهم‌ها را از ورودی‌های m جمع‌آوری کن
-				Round3Input input_from_m = round3Inputs.get(u_m.id);
-				if (input_from_m != null && input_from_m.beta_shares.containsKey(u_n.id)) {
-					betaSharesFor_n.add(input_from_m.beta_shares.get(u_n.id));
-				}
-			}
+        // 2. بازسازی beta_n و N_sk (به صورت BigInteger)
+        List<BigInteger> sum_PRG_beta = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        List<BigInteger> sum_PRG_s_pos = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
+        List<BigInteger> sum_PRG_s_neg = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
 
-			if (betaSharesFor_n.size() >= t) {
-				BigInteger beta_n = Crypto.S_recon(betaSharesFor_n, t);
-				sum_PRG_beta = addVectors(sum_PRG_beta, Crypto.PRG(beta_n, gradientSize));
-			}
+        Map<Integer, BigInteger> reconstructed_N_sk = new HashMap<>();
 
-			// ج) بازسازی N_n_sk
-			List<Crypto.ShamirPoint> nskSharesFor_n = new ArrayList<>();
-			for (User u_m : U3) {
-				Round3Input input_from_m = round3Inputs.get(u_m.id);
-				if (input_from_m != null && input_from_m.Nsk_shares.containsKey(u_n.id)) {
-					nskSharesFor_n.add(input_from_m.Nsk_shares.get(u_n.id));
-				}
-			}
+        for (User u_n : U3) {
+            // بازسازی beta_n
+            List<Crypto.ShamirPoint> betaShares = new ArrayList<>();
+            for (User u_m : U3) {
+                Round3Input in = round3Inputs.get(u_m.id);
+                if (in != null && in.beta_shares.containsKey(u_n.id)) {
+                    betaShares.add(in.beta_shares.get(u_n.id));
+                }
+            }
+            if (betaShares.size() >= t) {
+                BigInteger beta_n = Crypto.S_recon(betaShares, t);
+                sum_PRG_beta = addVectors(sum_PRG_beta, Crypto.PRG(beta_n, gradientSize));
+            }
 
-			if (nskSharesFor_n.size() >= t) {
-				BigInteger N_n_sk = Crypto.S_recon(nskSharesFor_n, t);
-				reconstructed_N_sk.put(u_n.id, N_n_sk);
-			}
-		}
+            // بازسازی N_sk (به صورت BigInteger از bytes)
+            List<Crypto.ShamirPoint> nskShares = new ArrayList<>();
+            for (User u_m : U3) {
+                Round3Input in = round3Inputs.get(u_m.id);
+                if (in != null && in.Nsk_shares.containsKey(u_n.id)) {
+                    nskShares.add(in.Nsk_shares.get(u_n.id));
+                }
+            }
+            if (nskShares.size() >= t) {
+                BigInteger N_sk_bigint = Crypto.S_recon(nskShares, t);
+                reconstructed_N_sk.put(u_n.id, N_sk_bigint);
+            }
+        }
 
-		// ج) محاسبه ماسک‌های مشترک s_n,m
-		for (User u_n : U3) {
-			for (User u_m : U3) {
-				if (u_n.id >= u_m.id)
-					continue; // فقط n < m
+        // 3. محاسبه s_n,m
+        for (User u_n : U3) {
+            for (User u_m : U3) {
+                if (u_n.id >= u_m.id) continue;
+                BigInteger sk_n = reconstructed_N_sk.get(u_n.id);
+                BigInteger sk_m = reconstructed_N_sk.get(u_m.id);
+                if (sk_n != null && sk_m != null) {
+                    // تبدیل به Element برای KA_agree
+                    Element sk_n_Zr = Crypto.toZr(sk_n);
+                    Element sk_m_Zr = Crypto.toZr(sk_m);
 
-				BigInteger N_n_sk = reconstructed_N_sk.get(u_n.id);
-				BigInteger N_m_sk = reconstructed_N_sk.get(u_m.id);
+                    Element seed_nm = Crypto.KA_agree(sk_n_Zr, u_m.N_pk);
+                    Element seed_mn = Crypto.KA_agree(sk_m_Zr, u_n.N_pk);
 
-				if (N_n_sk != null && N_m_sk != null) {
-					BigInteger s_n_m = Crypto.KA_agree(N_n_sk, u_m.N_pk);
-					BigInteger s_m_n = Crypto.KA_agree(N_m_sk, u_n.N_pk);
+                    BigInteger s_nm = new BigInteger(1, seed_nm.toBytes()).mod(Crypto.Q);
+                    BigInteger s_mn = new BigInteger(1, seed_mn.toBytes()).mod(Crypto.Q);
 
-					// s_n,m باید برابر با s_m,n باشد
-					List<BigInteger> prg_s_n_m = Crypto.PRG(s_n_m, gradientSize);
-					List<BigInteger> prg_s_m_n = Crypto.PRG(s_m_n, gradientSize);
+                    List<BigInteger> prg_nm = Crypto.PRG(s_nm, gradientSize);
+                    List<BigInteger> prg_mn = Crypto.PRG(s_mn, gradientSize);
 
-					sum_PRG_s_positive = addVectors(sum_PRG_s_positive, prg_s_n_m);
-					sum_PRG_s_negative = addVectors(sum_PRG_s_negative, prg_s_m_n);
-				}
-			}
-		}
+                    sum_PRG_s_pos = addVectors(sum_PRG_s_pos, prg_nm);
+                    sum_PRG_s_neg = addVectors(sum_PRG_s_neg, prg_mn);
+                }
+            }
+        }
 
-		// 3. محاسبه گرادیان تجمیع‌شده نهایی (sigma) - برداری
-		List<BigInteger> sigma = new ArrayList<>(gradientSize);
-		for (int i = 0; i < gradientSize; i++) {
-			BigInteger mask = sum_PRG_beta.get(i).add(sum_PRG_s_positive.get(i)).subtract(sum_PRG_s_negative.get(i))
-					.mod(Crypto.Q);
-			sigma.add(sum_X_hat.get(i).subtract(mask).mod(Crypto.Q));
-		}
+        // 4. محاسبه sigma
+        List<BigInteger> sigma = new ArrayList<>(gradientSize);
+        for (int i = 0; i < gradientSize; i++) {
+            BigInteger mask = sum_PRG_beta.get(i)
+                    .add(sum_PRG_s_pos.get(i))
+                    .subtract(sum_PRG_s_neg.get(i))
+                    .mod(Crypto.Q);
+            sigma.add(sum_X_hat.get(i).subtract(mask).mod(Crypto.Q));
+        }
 
-		// 4. محاسبه اثبات تجمیع‌شده (A, B, L, Q)
-		Element aggA = Crypto.pairing.getG1().newOneElement().getImmutable(); // identity element
-		Element aggB = Crypto.pairing.getG1().newOneElement().getImmutable();
-		Element aggL = Crypto.pairing.getG1().newOneElement().getImmutable();
-		Element aggQ = Crypto.pairing.getG1().newOneElement().getImmutable();
+        ExecutionTimer.addServerTime(Round.R3, System.nanoTime() - startTime);
 
-		for (User u : U3) {
-		    Round2Output output = round2Outputs.get(u.id);
-		    if (output != null) {
-		    	aggA = aggA.duplicate().mul(output.A).getImmutable();
-		    	aggB = aggB.duplicate().mul(output.B).getImmutable();
-		    	aggL = aggL.duplicate().mul(output.L).getImmutable();
-		    	aggQ = aggQ.duplicate().mul(output.Q).getImmutable();
-		    }
-		}
+        return new Round3Output(sigma, aggA, aggB, aggL, aggQ, phi_total);
+    }
 
-		ExecutionTimer.addServerTime(Round.R3, System.nanoTime() - startTime);
-
-		return new Round3Output(sigma.get(0), aggA, aggB, aggL, aggQ, BigInteger.ONE);
-	}
-
-	// متد کمکی برای جمع بردارها
-	private List<BigInteger> addVectors(List<BigInteger> v1, List<BigInteger> v2) {
-		List<BigInteger> result = new ArrayList<>(v1.size());
-		for (int i = 0; i < v1.size(); i++) {
-			result.add(v1.get(i).add(v2.get(i)).mod(Crypto.Q));
-		}
-		return result;
-	}
+    private List<BigInteger> addVectors(List<BigInteger> a, List<BigInteger> b) {
+        List<BigInteger> res = new ArrayList<>();
+        for (int i = 0; i < a.size(); i++) {
+            res.add(a.get(i).add(b.get(i)).mod(Crypto.Q));
+        }
+        return res;
+    }
 }
