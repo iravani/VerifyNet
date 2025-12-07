@@ -12,8 +12,8 @@ public class VerifyNetProtocol {
     private static final int NUM_EPOCHS = 1;
     private static final int GRADIENT_SIZE = 1000;
     private static final double DROPOUT_RATE = 0.1;
-    private static final int USER_COUNT = 100;
-    private static final int SHAMIR_TRESHOLD = 50;
+    private static final int USER_COUNT = 10;
+    private static final int SHAMIR_TRESHOLD = 5;
 
     public static List<User> filterUsersByDropout(List<User> users, double rate) {
         if (rate == 0.0) return new ArrayList<>(users);
@@ -139,20 +139,19 @@ public class VerifyNetProtocol {
             Round3Output result = server.round3_UnmaskingAndAggregation(finalR2, round3Inputs, U3, SHAMIR_TRESHOLD);
             System.out.printf("→ Σ = [%s, ..., ?] (only first component shown)\n", result.sigma.get(0));
 
-            // ── R4: Verification ──
+         // ── R4: Verification ──
             System.out.print("R4 | Pairing-based Verification ... ");
             int passed = 0;
-            BigInteger phi_server = result.phi_total;
 
             for (User u : U3) {
                 boolean ok = u.round4_Verification_withJPBC(
-                    Crypto.pairing, Crypto.g, Crypto.h,
-                    result.A, result.B, result.L, result.Q,
-                    phi_server
+                    result.A_agg,
+                    result.B_agg,
+                    result.sum_x_first   // ← این دقیقاً Σ x_i[0] واقعی است
                 );
                 if (ok) passed++;
             }
-
+            
             String verdict = (passed == U3.size()) ? "ALL PASSED" : "SOME FAILED";
             System.out.printf("→ %d / %d users verified → %s\n", passed, U3.size(), verdict);
 

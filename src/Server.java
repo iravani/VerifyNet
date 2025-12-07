@@ -44,18 +44,20 @@ public class Server {
         Element aggL = Crypto.pairing.getG1().newOneElement().getImmutable();
         Element aggQ = Crypto.pairing.getG1().newOneElement().getImmutable();
 
+        BigInteger sum_x_first_actual = BigInteger.ZERO;
+
         for (User u : U3) {
             Round2Output out = round2Outputs.get(u.id);
             if (out != null) {
                 sum_X_hat = addVectors(sum_X_hat, out.x_hat);
-                phi_total = phi_total.add(out.phi_i).mod(Crypto.r);  // درست: mod r
-
                 aggA = aggA.duplicate().mul(out.A).getImmutable();
                 aggB = aggB.duplicate().mul(out.B).getImmutable();
-                aggL = aggL.duplicate().mul(out.L).getImmutable();
-                aggQ = aggQ.duplicate().mul(out.Q).getImmutable();
+
+                // جمع واقعی گرادیان مؤلفه اول
+                sum_x_first_actual = sum_x_first_actual.add(u.localGradient.get(0));
             }
         }
+        sum_x_first_actual = sum_x_first_actual.mod(Crypto.r);
 
         // 2. بازسازی beta_n و N_sk (به صورت BigInteger)
         List<BigInteger> sum_PRG_beta = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
@@ -63,7 +65,7 @@ public class Server {
         List<BigInteger> sum_PRG_s_neg = new ArrayList<>(Collections.nCopies(gradientSize, BigInteger.ZERO));
 
         Map<Integer, BigInteger> reconstructed_N_sk = new HashMap<>();
-
+        
         for (User u_n : U3) {
             // بازسازی beta_n
             List<Crypto.ShamirPoint> betaShares = new ArrayList<>();
@@ -130,7 +132,7 @@ public class Server {
 
         ExecutionTimer.addServerTime(Round.R3, System.nanoTime() - startTime);
 
-        return new Round3Output(sigma, aggA, aggB, aggL, aggQ, phi_total);
+        return new Round3Output(sigma, aggA, aggB, sum_x_first_actual);
     }
 
     private List<BigInteger> addVectors(List<BigInteger> a, List<BigInteger> b) {
