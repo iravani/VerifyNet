@@ -12,8 +12,8 @@ public class VerifyNetProtocol {
     private static final int NUM_EPOCHS = 1;
     private static final int GRADIENT_SIZE = 1000;
     private static final double DROPOUT_RATE = 0.1;
-    private static final int USER_COUNT = 10;
-    private static final int SHAMIR_TRESHOLD = 5;
+    private static final int USER_COUNT = 100;
+    private static final int SHAMIR_TRESHOLD = 50;
 
     public static List<User> filterUsersByDropout(List<User> users, double rate) {
         if (rate == 0.0) return new ArrayList<>(users);
